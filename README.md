@@ -6,10 +6,10 @@ A chat-based system implemented using RAG Architecture for Querying Fedpoffa AI-
 
 ## Tools
 - Langchain
-- Openai
-- GPT-4o LLM
+- Openai GPT-4o LLM
 - Python
-- Objectbox (VectorDB)
+- ChromaDB (ChromaDB)
 - OpenAIEmbedding
 - RecursiveCharacterTextSplitter (for chunking)
+- uv package manager
 
