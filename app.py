@@ -1,4 +1,7 @@
+import logging
 import os
+
+# from dataclasses import dataclass, Field
 from typing import List, Optional, Union
 
 from dotenv import load_dotenv
@@ -10,6 +13,8 @@ from langchain_community.document_loaders import (
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import Chroma
+from langchain_core.embeddings import Embeddings
+from langchain_core.retrievers import BaseRetriever
 
 # RAG Pipeline
 from langchain.chains import create_retrieval_chain
@@ -17,15 +22,22 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 load_dotenv()
 
 os.environ["OPENAI_API_KEY"] = os.getenv("OPENAI_API_KEY")
-DB_PATH = os.getenv("CHROMA_DB_PATH")
-DB_COLLECTION_NAME = os.getenv("CHROMA_DB_COLLECTION_NAME")
 
-text_splitter = RecursiveCharacterTextSplitter()
-embedding = OpenAIEmbeddings(model="text-embedding-ada-002")
+
+TEXT_SPLITTER = RecursiveCharacterTextSplitter()
+
+
+class EmbeddingConfig:
+    openai_embedding: OpenAIEmbeddings = OpenAIEmbeddings(
+        model="text-embedding-ada-002",
+    )
+
 
 # llm RAG Pipeline
 llm = ChatOpenAI(model="gpt-4o")  # Calling the GPT-4o
@@ -51,11 +63,12 @@ class Pdf_RAG_GPT_LLM:
                 "pdf_data_path must either be a PDF file path"
                 "or directory path containing PDF files"
             )
-        self.text_splitter = RecursiveCharacterTextSplitter()
+        self.TEXT_SPLITTER = RecursiveCharacterTextSplitter()
         self.embedding = OpenAIEmbeddings()
         self.llm = ChatOpenAI(model="gpt-3.5-turbo")
 
 
+# step
 def get_loader(pdf_data_path: str) -> Union[PyPDFLoader, PyPDFDirectoryLoader]:
     """Gets a PDF loader object.
 
@@ -65,22 +78,31 @@ def get_loader(pdf_data_path: str) -> Union[PyPDFLoader, PyPDFDirectoryLoader]:
     :returns Union[PyPDFLoader, PyPDFDirectoryLoader]: An loader object.
     """
     try:
+        logger.info("getting loader")
         if os.path.isfile(pdf_data_path) and ".pdf" in pdf_data_path:
             loader = PyPDFLoader(pdf_data_path)
-        elif os.path.isdir(pdf_data_path):
+            logger.info("pdf file detected")
+        elif (
+            os.path.isdir(pdf_data_path) and len(os.listdir(pdf_data_path)) > 0
+        ):  # no-qa
             loader = PyPDFDirectoryLoader(
                 pdf_data_path,
+                glob="**/[!.]*.pdf",
             )
+            logger.info("Folder detected")
         else:
             raise ValueError(
                 "pdf_data_path must either be a PDF file path"
                 "or directory path containing PDF files"
             )
+        logger.info("loader ready")
         return loader
-    except ValueError:
+    except ValueError as e:
+        logger.error(e)
         raise
 
 
+# step
 def load_pdf_documents(pdf_data_path: str) -> List[Document]:
     """Loads PDF documents from a path specified.
 
@@ -92,9 +114,11 @@ def load_pdf_documents(pdf_data_path: str) -> List[Document]:
     """
     loader = get_loader(pdf_data_path)
     documents = loader.load()
+    logger.info("PDF documents loaded")
     return documents
 
 
+# step
 def split_documents(
     documents: list[Document],
     chunk_size: int,
@@ -109,61 +133,153 @@ def split_documents(
 
     :returns list[langchain_core.documents.Document]]: list of splitted chunks.
     """
-    text_splitter._chunk_size = chunk_size
-    text_splitter._chunk_overlap = chunk_overlap
-    splitted_text = text_splitter.split_documents(documents)
+    TEXT_SPLITTER._chunk_size = chunk_size
+    TEXT_SPLITTER._chunk_overlap = chunk_overlap
+    splitted_text = TEXT_SPLITTER.split_documents(documents)
+    logger.info("Documents splitted")
     return splitted_text
 
 
-def embed_documents(documents: List[Document]):
+# step
+def embed_documents(
+    documents: List[Document], embedding: Optional[Embeddings] = None
+) -> list[list[float]]:
+    """Create embedings of documents.
+
+    :param documents (list[langchain_core.documents.Document]): List of
+        document objects to embed.
+    :param embedding (Optional[Embeddings]): Embedding object to use
+
+    :returns list[list[float]]: list of document embeddings.
+    """
+    embedding = embedding or EmbeddingConfig.openai_embedding
     doc_texts = [doc.page_content for doc in documents]
     docs_embeddings = embedding.embed_documents(texts=doc_texts)
+    logger.info("Documents embedded")
     return docs_embeddings
 
 
-def store_documents_in_vector_store(documents: List[Document]):
+# step
+def store_documents_in_vector_store(
+    documents: List[Document],
+    embedding: Optional[Embeddings] = None,
+    persist_directory: str = "",
+    collection_name: str = "",
+) -> Chroma:
+    """Store documents into a ChromaDB vector store.
+
+    :param documents (list[langchain_core.documents.Document]): List of
+        document objects to store.
+    :param embedding (Optional[Embeddings]): Embedding object to use
+    :param persist_directory (str): The directory to Store vector DB to.
+    :param collection_name (str): The name of the collection to Store
+        embeddings to.
+
+    :returns Chroma: A Chroma object/instance.
+    """
     chroma_db = Chroma.from_documents(
         documents=documents,
         embedding=embedding,
-        persist_directory=DB_PATH,
-        collection_name=DB_COLLECTION_NAME,
+        persist_directory=persist_directory,
+        collection_name=collection_name,
     )
+    logger.info("Documents stored in Chroma VectorDB")
     return chroma_db
 
 
-def load_vector_store_retriever(
-    db_path: str, collection_name: Optional[str] = None, k=4
+# step
+def load_chroma_vector_store_retriever(
+    db_path: str,
+    collection_name: str = "",
+    k: int = 4,
+    embedding: Optional[Embeddings] = None,
 ):
+    """Store documents into a ChromaDB vector store.
+
+    :param db_path (str): The directory to load vector DB from.
+    :param collection_name (str): The name of the collection to load
+        chunks from.
+    :param k (int): The number of chunks to retrieve as context.
+    :param embeddings (Optional[Embeddings]): Embedding object to use
+
+    :returns VectorStoreRetriever: A VectorStoreRetriever object/instance.
+    """
     db_client = Chroma(
         persist_directory=db_path,
         collection_name=collection_name if collection_name else "langchain",
-        embedding=embedding,
+        embedding_function=embedding,
     )
     retriever = db_client.as_retriever(search_kwargs={"k": k})
+    logger.info("chroma vector retrieval loaded")
     return retriever
 
 
-def get_response(query: str):
-    retriever = load_vector_store_retriever(
-        db_path=DB_PATH, collection_name=DB_COLLECTION_NAME, k=4
-    )
-
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            ("system", SYSTEM_PROMPT),
-            ("human", "{input}"),
-        ]
-    )
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    chain = create_retrieval_chain(retriever, question_answer_chain)
-
-    response = chain.invoke({"input": query})
-    return response
-
-
-class RAG_Query:
-    def __init__(self, db_path: str):
-        self.vector_store = Chroma.as_retriever(
-            search_type="similarity_score_threshold",
-            search_kwargs={"score_threshold": 0.8, "k": 4},
+# step
+def get_response(query: str, retriever: BaseRetriever):
+    try:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                ("system", SYSTEM_PROMPT),
+                ("human", "{input}"),
+            ]
         )
+        question_answer_chain = create_stuff_documents_chain(llm, prompt)
+        chain = create_retrieval_chain(retriever, question_answer_chain)
+
+        response = chain.invoke({"input": query})
+        log_data = {"query": query, "response": response}
+        logger.info(log_data)
+        return response
+    except Exception as e:
+        logger.error(e)
+        raise
+
+
+# Pipeline
+def extract_and_store_external_knowlede(
+    doc_path: str,
+    chunk_size: int = 500,
+    chunk_overlap: int = 200,
+    embedding: Optional[Embeddings] = None,
+    persist_directory: str = "",
+    collection_name: str = "",
+):
+    documents = load_pdf_documents(doc_path)
+    splitted_docs = split_documents(documents, chunk_size, chunk_overlap)
+    db_instance = store_documents_in_vector_store(
+        documents=splitted_docs,
+        embedding=embedding or EmbeddingConfig.openai_embedding,
+        persist_directory=persist_directory,
+        collection_name=collection_name or "langchain",
+    )
+    logger.info(
+        "Additional external knowledge stored in vectorDB successfully"
+    )  # no-qa
+    return db_instance
+
+
+# Pipeline
+def process_query(
+    query: str,
+    db_path: str = "",
+    collection_name: str = "langchain",
+    retriever: Optional[BaseRetriever] = None,
+) -> str:
+    try:
+        if not retriever and not db_path:
+            raise ValueError(
+                "One of 'retriever' or 'db_path' param must be supplied."
+            )  # no-qa
+
+        if db_path:
+            retriever = load_chroma_vector_store_retriever(
+                db_path=db_path,
+                collection_name=collection_name,
+                embedding=EmbeddingConfig.openai_embedding,
+                k=4,
+            )
+        response = get_response(query=query, retriever=retriever)
+        return response
+    except ValueError as e:
+        logger.error(e)
+        raise
