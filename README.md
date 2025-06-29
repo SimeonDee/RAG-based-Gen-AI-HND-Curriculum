@@ -12,4 +12,42 @@ A chat-based system implemented using RAG Architecture for Querying Fedpoffa AI-
 - OpenAIEmbedding
 - RecursiveCharacterTextSplitter (for chunking)
 - uv package manager
+- Pinecone (vector db)
 
+## Setup
+
+- Install uv package manager
+```bash
+$ make install-uv
+```
+
+- Create virtual environment
+```bash
+$ make venv
+```
+
+- Activate the virtual environment
+    - MacOs / Unix Systems (terminal)
+    ```bash
+    $ source .venv/bin/activate
+    ```
+
+    - Windows (Command Prompt)
+    ```bash
+    $ source .venv/Scripts/activate.bat
+    ```
+    
+    - Windows (Powershel)
+    ```bash
+    $ source .venv/Scripts/activate.ps1
+    ```
+
+- Install dependencies
+```bash
+(.venv) $ make install
+```
+
+- Run app
+```bash
+(.venv) $ make run
+```
