@@ -5,8 +5,6 @@ build/
 dist/
 wheels/
 *.egg-info
-database/
-data/
 
 # Virtual environments
 .venv
@@ -14,4 +12,6 @@ data/
 
 # Others
 .DS_Store
-
+database/
+data/
+logs.log
